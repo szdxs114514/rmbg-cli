@@ -74,10 +74,12 @@ jobs:
 
           if ($found.Count -gt 0) {
             $found | ForEach-Object { Write-Host "::error::易受攻击的依赖：$_" }
-            throw "发现 $($found.Count) 个存在已知漏洞的依赖包。"
+            Write-Host "::error::发现 $($found.Count) 个存在已知漏洞的依赖包。"
+            exit 1
           }
 
           Write-Host '未发现存在已知漏洞的依赖包。'
+          exit 0
 
       - name: CLI 行为冒烟测试
         shell: pwsh
@@ -178,17 +180,24 @@ jobs:
             if ($stack) { $stack = $stack -replace '\r?\n', ' <- ' }
             Write-Host "::error::冒烟测试脚本异常：$($_.Exception.Message)"
             Write-Host "::error::调用位置：$stack"
-            throw
+            exit 1
           }
 
           if ($failures.Count -gt 0) {
             Write-Host ''
             $failures | ForEach-Object { Write-Host "::error::$_" }
-            throw "$($failures.Count) 项冒烟测试失败。"
+            Write-Host "::error::$($failures.Count) 项冒烟测试失败。"
+            exit 1
           }
 
           Write-Host ''
           Write-Host '全部冒烟测试通过。'
+
+          # 必须显式 exit：本脚本最后一次原生调用是"预期会失败"的程序（退出码非零），
+          # 而较新的 PowerShell（实测 runner 上的 7.6.5）会把非零的 $LASTEXITCODE
+          # 反映成进程退出码，导致"测试全部通过"仍被判为步骤失败。
+          # 显式 exit 0 才能消除这个歧义。
+          exit 0
 
   package:
     name: 发布包校验（${{ matrix.rid }}）
