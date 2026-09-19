@@ -630,6 +630,7 @@ bin/Debug/net8.0-windows10.0.19041.0/win-x64/
 RmbgCli/
 ├─ RmbgCli.sln                     解决方案
 ├─ README.md                       本文档
+├─ LICENSE                         许可证全文（Apache-2.0）
 ├─ .gitignore
 ├─ .gitattributes                  换行规范化规则
 ├─ .github/
@@ -800,7 +801,8 @@ git push origin v1.0.0
 签名产物在合并进 Release 前会被校验：解出 `rmbg.exe` 读取 Authenticode 状态。
 若签名流程报告成功但文件仍是未签名状态，构建直接失败。
 
-> SignPath 免费的开源签名名额要求仓库先带有 OSI 认可的开源许可证，见 [15. 许可证](#15-许可证)。
+> SignPath 免费的开源签名名额要求仓库带有 OSI 认可的开源许可证。本项目使用 Apache-2.0
+> （见 [15. 许可证](#15-许可证) 与 [LICENSE](LICENSE)），该项前置条件已满足。
 
 ---
 
@@ -888,7 +890,9 @@ git push origin v1.0.0
     受限网络、离线或需要固定版本的环境，应改用官方「自带 EP」方式把 EP 随应用分发。
 11. **EP 安装是系统级行为**。安装后的 EP 会被同机其它应用共享，且可能随 Windows 自动更新。
     这既是优点（一次安装多处受益），也意味着本工具不会在未经确认的情况下安装。
-12. **目前一键下载模型只能从ModelScope下载（因为Hugging Face的原版模型是Gated Model）**，如果需要指定BRIA AI原版需要自行下载并且指定模型路径
+12. **目前一键下载模型只能从 ModelScope 下载**（因为 Hugging Face 上的原版模型是 Gated Model）；
+    如果需要使用 BRIA AI 原版权重，需要自行下载并用 `--model <路径>` 指定。
+
 ---
 
 ## 14. 隐私与费用
@@ -911,7 +915,11 @@ git push origin v1.0.0
 
 ## 15. 许可证
 
-Apache-2.0
+本仓库代码采用 **Apache-2.0**，全文见 [LICENSE](LICENSE)。
 
-请注意模型权重本身另有其授权条款（[RMBG-2.0 / BRIA](使用CC BY-NC 4.0，商业用途需与 BRIA 签订商业协议)），
-与本仓库代码的许可证相互独立。
+模型权重另有其授权条款：RMBG-2.0 / BiRefNet 由 [BRIA AI](https://huggingface.co/briaai/RMBG-2.0) 发布，
+采用 [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)（署名—非商业性使用），
+**商业用途需与 BRIA 签订商业协议**。模型权重与本仓库代码的许可证相互独立。
+
+> Apache-2.0 是 OSI 认可的开源许可证，这同时满足了 SignPath 免费开源签名名额对许可证的要求
+> （见 [10.4 代码签名（SignPath）](#104-代码签名signpath)）。
