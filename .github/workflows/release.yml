@@ -39,6 +39,9 @@ env:
   DOTNET_NOLOGO: 'true'
   DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
   CONFIGURATION: Release
+  # 发布包数量：package job 的矩阵里每个 RID 产出一个。
+  # 增减矩阵时需要同步修改这里，否则发布前的校验会拦下（这是有意的）。
+  EXPECTED_PACKAGES: '2'
 
 jobs:
   prepare:
@@ -321,19 +324,29 @@ jobs:
       - name: 下载全部发布产物
         uses: actions/download-artifact@v8
         with:
-          pattern: release-*
+          # 刻意不用 pattern 过滤：实测 upload-artifact 在 archive: false 时
+          # 会让 name 参数失效、改用「文件名」作为产物名
+          # （SignPath 文档也提到过这条缺陷），所以按产物名匹配并不可靠。
+          # 这里全量下载，下一步再按文件名挑出要发布的包。
           merge-multiple: true
           path: artifacts
 
-      - name: 列出待发布文件
+      - name: 挑选发布文件
         run: |
           set -euo pipefail
+
+          # unsigned-*.zip 只是签名流程用的上传件，不是发布资产。
+          rm -f artifacts/unsigned-*.zip
+
           ls -lh artifacts
-          count=$(find artifacts -type f | wc -l)
-          if [ "$count" -eq 0 ]; then
-            echo "::error::没有可发布的产物。"
+          count=$(find artifacts -type f -name 'rmbg-cli-*.zip' | wc -l)
+          if [ "$count" -ne "${{ env.EXPECTED_PACKAGES }}" ]; then
+            echo "::error::期望 ${{ env.EXPECTED_PACKAGES }} 个发布包，实际 $count 个。实际文件："
+            find artifacts -type f | sed 's/^/  /'
             exit 1
           fi
+
+          echo "共 $count 个发布包。"
 
       - name: 校验校验和
         run: |
