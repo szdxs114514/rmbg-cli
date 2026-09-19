@@ -1,5 +1,8 @@
 # rmbg — 一键抠图，自动去掉图片背景
 
+[![CI](https://github.com/szdxs114514/rmbg-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/szdxs114514/rmbg-cli/actions/workflows/ci.yml)
+[![Release](https://github.com/szdxs114514/rmbg-cli/actions/workflows/release.yml/badge.svg)](https://github.com/szdxs114514/rmbg-cli/actions/workflows/release.yml)
+
 把照片里的**主体**（人、商品、宠物、logo…）自动抠出来，去掉背景，得到一张透明底的 PNG。
 
 - **全自动**：不需要用套索或魔棒一点点描边，选中图片就能出结果。
@@ -23,10 +26,12 @@
 - [7. 执行提供程序的安装与选择](#7-执行提供程序的安装与选择)
 - [8. 运行环境与依赖](#8-运行环境与依赖)
 - [9. 项目结构](#9-项目结构)
-- [10. 实测性能](#10-实测性能)
-- [11. 故障排查](#11-故障排查)
-- [12. 已知限制](#12-已知限制)
-- [13. 隐私与费用](#13-隐私与费用)
+- [10. CI、发布与代码签名](#10-ci发布与代码签名)
+- [11. 实测性能](#11-实测性能)
+- [12. 故障排查](#12-故障排查)
+- [13. 已知限制](#13-已知限制)
+- [14. 隐私与费用](#14-隐私与费用)
+- [15. 许可证](#15-许可证)
 
 ---
 
@@ -55,15 +60,24 @@
 | 项目 | 要求 |
 | --- | --- |
 | 系统 | Windows 10 版本 1903（2019 年 5 月更新）或更新版本，64 位 |
-| 运行环境 | .NET 8 运行时（免费，约 60 MB，装一次即可） |
+| 运行环境 | 下载预编译版本则**无需安装任何东西**（已内置 .NET 运行时）；从源码构建需 .NET 8 SDK |
 | 磁盘空间 | 约 1 GB（其中模型权重 490 MB） |
 | 显卡 | 可选。有独显更快，没有也能用 CPU 处理 |
 
-如果启动时提示缺少 .NET，去 https://dotnet.microsoft.com/download/dotnet/8.0 下载
+**先拿到程序**，两条路选一条：
+
+| 方式 | 做法 |
+| --- | --- |
+| 下载预编译版本（推荐） | 到 [Releases](https://github.com/szdxs114514/rmbg-cli/releases/latest) 下载 `rmbg-cli-<版本>-win-x64.zip`（ARM64 设备用 `win-arm64`），**解压后直接运行 `rmbg.exe`**。这是自包含发布，已含 .NET 运行时，不需要再装别的东西 |
+| 从源码构建 | 见 [2.5 从源码构建](#25-从源码构建)，需要自行安装 .NET SDK |
+
+如果从源码构建后启动时提示缺少 .NET，去 https://dotnet.microsoft.com/download/dotnet/8.0 下载
 **.NET Runtime** 下的 **Windows x64** 安装即可。
 
 > 最低系统版本由 `Microsoft.Windows.AI.MachineLearning` 包强制要求（Windows 10 19H1 / build 18362），
 > 且该要求在**构建期**就会校验，低于此版本会直接构建失败并提示替代方案。
+
+> 模型权重体积较大（490 MB），没有打进发布包，首次使用需下载一次，见 [2.2](#22-最简单的用法双击运行) 与 [6.2](#62-模型下载器aria2-优先)。
 
 ### 2.2 最简单的用法：双击运行
 
@@ -580,6 +594,20 @@ Windows 因此拒绝安装。工具把 `ExtendedError` 与 `DiagnosticText` 原�
 Windows ML 包已自带同名的托管绑定与原生 `onnxruntime.dll`，重复引用会导致原生库冲突
 （两个不同版本的 `onnxruntime.dll` 争抢加载）。
 
+**关于 ImageSharp 为什么停在 3.x**：`Microsoft.Windows.AI.MachineLearning` 最新稳定版就是
+2.3.42（更高只有 `2.6.x-rc` 预览版），已是最新。而 ImageSharp 的**稳定版已到 4.1.2**，
+但 4.x 起改为商业授权，构建期会强制要求许可证，缺失就直接编译失败：
+
+```
+error : No Six Labors license found. Set $(SixLaborsLicenseKey), set $(SixLaborsLicenseFile),
+        or add a 'sixlabors.lic' file to the project/workspace.
+error : Please obtain a license from https://sixlabors.com/pricing/
+```
+
+所以本项目有意停留在 **3.1.12**——这是免费授权（Six Labors Split License）线路上的最高版本。
+除非你持有 ImageSharp 商业许可证，否则不要升级到 4.x；`dependabot.yml` 里也已显式忽略
+`>=4.0.0`，避免反复收到无法合并的升级 PR。
+
 原生库在输出目录中的部署形态：
 
 ```
@@ -603,6 +631,15 @@ RmbgCli/
 ├─ RmbgCli.sln                     解决方案
 ├─ README.md                       本文档
 ├─ .gitignore
+├─ .gitattributes                  换行规范化规则
+├─ .github/
+│  ├─ workflows/
+│  │  ├─ ci.yml                    CI：编译 + 依赖审计 + 退出码契约测试 + 双 RID 发布包校验
+│  │  └─ release.yml               发布：打标签出包 + 可选 SignPath 签名
+│  ├─ dependabot.yml               每周检查 NuGet / Actions 更新（忽略 ImageSharp 4.x）
+│  └─ release.yml                  定制 Release Notes 分类
+├─ .signpath/
+│  └─ artifact-configuration.xml   SignPath 制品配置（版本控制副本，见第 10 章）
 ├─ scripts/
 │  └─ Get-RmbgModel.ps1            从 ModelScope 下载 ONNX 权重（优先 aria2，回退 curl）
 ├─ models/
@@ -651,7 +688,123 @@ RmbgCli/
 
 ---
 
-## 10. 实测性能
+## 10. CI、发布与代码签名
+
+### 10.1 工作流一览
+
+| 工作流 | 触发条件 | 做什么 |
+| --- | --- | --- |
+| [`ci.yml`](.github/workflows/ci.yml) | push 到 `main`、PR、手动 | 编译（警告视为错误）→ 依赖漏洞审计 → CLI 退出码契约冒烟测试 → 两个 RID 的发布包校验 |
+| [`release.yml`](.github/workflows/release.yml) | 推送 `v*` 标签、手动指定标签 | 解析版本号 → 按 RID 并行打包 → （可选）SignPath 签名 → 签名校验 → 创建 GitHub Release |
+
+另有 [`dependabot.yml`](.github/dependabot.yml)：每周一 04:00（东八区）检查 NuGet 与
+GitHub Actions 的版本更新，同类更新合并成一个 PR。它显式忽略 `SixLabors.ImageSharp >= 4.0.0`，
+原因见 [8.2 依赖包](#82-依赖包)。
+
+### 10.2 CI 具体检查什么
+
+**编译与依赖审计**
+
+- `dotnet build -warnaserror`：项目当前 0 警告，把警告升级为错误可以防止质量随时间退化。
+- 依赖漏洞审计调用 `dotnet list package --vulnerable --include-transitive`，
+  但**解析 JSON 而不是匹配输出文本**——后者会随 dotnet CLI 的界面语言（中文/英文）变化而失效。
+
+**退出码契约冒烟测试**
+
+CI 逐条核对 [第 3 章](#退出码) 承诺的退出码，共 11 条断言：
+
+| 场景 | 期望退出码 |
+| --- | --- |
+| `--version` / `--help` / `--ep list` | 0 |
+| 未知选项、缺少输出路径、未知模型变体、非法枚举值、`--size` 非 32 倍数 | 2 |
+| 输入路径不存在 | 5 |
+| 模型文件不存在 | 3 |
+
+两个踩过的实现细节：
+
+- **必须容忍 stderr**。被测试的程序会把错误与警告写到 stderr，而这里期望的正是非零退出码；
+  在 PowerShell 7.3+ 需要 `$PSNativeCommandUseErrorActionPreference = $false`，
+  更早的版本（含 5.1）还要在调用期间临时把 `$ErrorActionPreference` 设为 `Continue`。
+  否则 stderr 会被当成终止性错误，测试就会假失败。
+- **要触达"模型文件不存在"，输入必须是一张能解码的图片**——因为输入路径校验与格式筛选
+  都在模型解析之前完成（这是有意的：无效路径不该白等一次模型加载）。
+  本仓库刻意不含任何测试图片，所以 CI 会在 runner 的临时目录里现造一个 2×2 PNG。
+  它只存在于运行期，不进仓库、不进产物。
+
+**发布包校验（`win-x64` 与 `win-arm64`）**
+
+两个 RID 各自跑在对应的**原生**运行器上（`windows-latest` / `windows-11-arm`），
+所以 arm64 产物是真的被执行过，而不是只证明"能打包"。检查项：
+
+- 逐个断言 7 个关键文件的存在：`rmbg.exe`、`rmbg.dll`、`onnxruntime.dll`、`DirectML.dll`、
+  `Microsoft.Windows.AI.MachineLearning.dll`、`Microsoft.ML.OnnxRuntime.dll`、`SixLabors.ImageSharp.dll`
+- 真实启动一次 `rmbg.exe --version`
+- 校验压缩包**根目录**就是文件本身（不能多一层文件夹，否则签名配置会匹配不上）
+
+> 自包含发布能编译成功、却因为找不到原生库而启动失败，是这类项目的典型故障，
+> 只有真的执行一次才能发现。
+
+**有意不做的**：端到端推理测试。那需要 490 MB 的模型权重和一张判读用的图片，
+不适合每次 push 都跑。推理正确性请按 [11. 实测性能](#11-实测性能) 里的方法用自备图片在本地验证。
+
+### 10.3 发布流程
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+`release.yml` 随后：
+
+1. 从标签解析版本号（`v1.0.0` → `1.0.0`）；标签格式不符会带着明确提示失败；
+2. 按 RID 并行发布，并把版本号写进程序集（`-p:Version=`）；发布前用 `rmbg.exe --version`
+   回读核对，避免"标签是 1.0.1、程序却自称 1.0.0"这种静默不一致；
+3. 打包为 `rmbg-cli-<版本>-<RID>.zip`，压缩包根目录直接是文件；
+4. 提交 SignPath 签名（若已配置），然后把产物统一成稳定命名；
+5. 校验签名状态，最后用 `gh release create` 发布，并附带 `SHA256SUMS.txt`。
+
+手动触发时需在 Actions 页面填写标签；勾选 `skip_signing` 可临时跳过签名。
+
+### 10.4 代码签名（SignPath）
+
+发布包默认**未签名**。配好下面这些内容后签名即自动生效，工作流无需改动：
+
+| 类型 | 名称 | 说明 |
+| --- | --- | --- |
+| Secret | `SIGNPATH_API_TOKEN` | SignPath 中具备提交权限的 API 令牌 |
+| Variable | `SIGNPATH_ORGANIZATION_ID` | SignPath 组织 ID |
+| Variable | `SIGNPATH_PROJECT_SLUG` | 项目 slug |
+| Variable | `SIGNPATH_SIGNING_POLICY_SLUG` | 签名策略 slug（如 `release-signing`） |
+| Variable | `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG`（可选） | 制品配置名，默认 `artifact-configuration` |
+
+在仓库 **Settings → Secrets and variables → Actions** 中配置。只要 `SIGNPATH_API_TOKEN`
+或任一 variable 为空，签名步骤就会被跳过并输出一条明确的 warning，发布流程本身不会失败。
+
+**制品配置需要在 SignPath 网站的项目里创建**（`Project → Artifact Configurations`）。
+纳入版本控制的副本见 [`.signpath/artifact-configuration.xml`](.signpath/artifact-configuration.xml)：
+
+```xml
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="rmbg.exe">
+      <authenticode-sign/>
+    </pe-file>
+  </zip-file>
+</artifact-configuration>
+```
+
+只签 `rmbg.exe`。压缩包内的 .NET 运行时、`onnxruntime.dll`、`DirectML.dll`、
+`SixLabors.ImageSharp.dll` 等**都是第三方组件，不应使用本项目的证书签名**——
+这也是 SignPath 文档明确建议的做法。
+
+签名产物在合并进 Release 前会被校验：解出 `rmbg.exe` 读取 Authenticode 状态。
+若签名流程报告成功但文件仍是未签名状态，构建直接失败。
+
+> SignPath 免费的开源签名名额要求仓库先带有 OSI 认可的开源许可证，见 [15. 许可证](#15-许可证)。
+
+---
+
+## 11. 实测性能
 
 测试机为 Windows 10.0.29667（虚拟化 GPU，无独立显卡、无 NPU），模型 `model_fp16.onnx`，
 输入 `--size 1024`：
@@ -666,7 +819,7 @@ RmbgCli/
 
 ---
 
-## 11. 故障排查
+## 12. 故障排查
 
 **提示还没有下载模型**
 模型还没下载。运行 `rmbg --download-model`，或直接运行 `rmbg` 在问答模式里选「下载 / 更换模型」。
@@ -712,7 +865,7 @@ RmbgCli/
 
 ---
 
-## 12. 已知限制
+## 13. 已知限制
 
 1. **仅支持单张串行推理**。未做批处理（batch>1）张量拼接，因为 RMBG-2.0 的导出图批维度虽为
    动态，但实测在 DirectML 上多批次收益有限且显存占用显著上升。
@@ -738,7 +891,7 @@ RmbgCli/
 
 ---
 
-## 13. 隐私与费用
+## 14. 隐私与费用
 
 - **图片不出本机**。所有推理都在你的电脑上完成，程序只在首次需要时联网下载模型。
 - **完全免费**。模型是开源权重，工具本身也没有任何联网校验、账号或次数限制。
@@ -753,3 +906,21 @@ RmbgCli/
   [安装 EP](https://learn.microsoft.com/windows/ai/new-windows-ml/initialize-execution-providers) ·
   [注册 EP](https://learn.microsoft.com/windows/ai/new-windows-ml/register-execution-providers) ·
   [选择 EP](https://learn.microsoft.com/windows/ai/new-windows-ml/select-execution-providers)
+
+---
+
+## 15. 许可证
+
+**本仓库目前尚未声明许可证**，因此默认保留所有权利——他人不能合法地使用、修改或分发这份代码。
+
+如果你打算让项目真正开源（同时也为了满足 SignPath 免费开源签名名额的前置条件），
+需要补一个 OSI 认可的开源许可证文件 `LICENSE`。常见选择：
+
+| 许可证 | 特点 |
+| --- | --- |
+| MIT | 最宽松、最短，允许闭源再分发 |
+| Apache-2.0 | 与 MIT 相近，另外含专利授权条款，适合有企业使用者的项目 |
+| GPL-3.0 | 强传染性，衍生作品必须同样开源 |
+
+请注意模型权重本身另有其授权条款（[RMBG-2.0 / BRIA](https://www.modelscope.cn/models/AI-ModelScope/RMBG-2.0)），
+与本仓库代码的许可证相互独立。

@@ -90,7 +90,20 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $false
 
           $exe = 'src/RmbgCli/bin/${{ env.CONFIGURATION }}/net8.0-windows10.0.19041.0/win-x64/rmbg.exe'
-          if (-not (Test-Path -LiteralPath $exe)) { throw "未找到可执行文件：$exe" }
+
+          Write-Host "工作目录：$PWD"
+          Write-Host "PowerShell：$($PSVersionTable.PSVersion)"
+          Write-Host "目标程序：$exe（存在：$(Test-Path -LiteralPath $exe)）"
+
+          if (-not (Test-Path -LiteralPath $exe)) {
+            $actual = Get-ChildItem -Path 'src/RmbgCli/bin' -Recurse -Filter 'rmbg.exe' -ErrorAction SilentlyContinue |
+              Select-Object -First 3 -ExpandProperty FullName
+            # 同时发成注解：CI 日志走 CDN，个别网络环境取不到，而注解走 api.github.com。
+            Write-Host "::error::未找到可执行文件：$exe"
+            Write-Host "::error::实际存在的 rmbg.exe：$($actual -join ' ; ')"
+            Write-Host "::error::工作目录=$PWD"
+            throw "未找到可执行文件：$exe"
+          }
 
           $failures = [System.Collections.Generic.List[string]]::new()
 
@@ -135,29 +148,38 @@ jobs:
             Write-Host "  + $Label -> 退出码 $code"
           }
 
-          Write-Host '--- 正常路径（期望退出码 0）---'
-          Test-Rmbg @('--version') 0 '--version' -OutputPattern 'rmbg \d+\.\d+'
-          Test-Rmbg @('--help')    0 '--help'    -OutputPattern '--recursive' -MinOutputLength 500
-          Test-Rmbg @('--ep', 'list') 0 '--ep list' -MinOutputLength 40
+          try {
+            Write-Host '--- 正常路径（期望退出码 0）---'
+            Test-Rmbg @('--version') 0 '--version' -OutputPattern 'rmbg \d+\.\d+'
+            Test-Rmbg @('--help')    0 '--help'    -OutputPattern '--recursive' -MinOutputLength 500
+            Test-Rmbg @('--ep', 'list') 0 '--ep list' -MinOutputLength 40
 
-          Write-Host '--- 参数错误（期望退出码 2）---'
-          Test-Rmbg @('--bogus') 2 '未知选项'
-          Test-Rmbg @('-i', 'in.png') 2 '缺少输出路径'
-          Test-Rmbg @('--download-model', 'bogus') 2 '未知模型变体'
-          Test-Rmbg @('-i', 'in.png', '-o', 'out', '--mask', 'wrong') 2 '非法枚举值'
-          Test-Rmbg @('-i', 'in.png', '-o', 'out', '--size', '1000') 2 'size 非 32 倍数'
+            Write-Host '--- 参数错误（期望退出码 2）---'
+            Test-Rmbg @('--bogus') 2 '未知选项'
+            Test-Rmbg @('-i', 'in.png') 2 '缺少输出路径'
+            Test-Rmbg @('--download-model', 'bogus') 2 '未知模型变体'
+            Test-Rmbg @('-i', 'in.png', '-o', 'out', '--mask', 'wrong') 2 '非法枚举值'
+            Test-Rmbg @('-i', 'in.png', '-o', 'out', '--size', '1000') 2 'size 非 32 倍数'
 
-          Write-Host '--- 环境/读写错误（期望退出码 3 / 5）---'
-          Test-Rmbg @('-i', 'C:\no\such\photo.png', '-o', (Join-Path $env:RUNNER_TEMP 'rmbg-smoke-out')) 5 '输入路径不存在'
+            Write-Host '--- 环境/读写错误（期望退出码 3 / 5）---'
+            Test-Rmbg @('-i', 'C:\no\such\photo.png', '-o', (Join-Path $env:RUNNER_TEMP 'rmbg-smoke-out')) 5 '输入路径不存在'
 
-          # 要触达"模型文件不存在"，输入必须先通过路径校验与格式筛选，
-          # 所以需要一张能解码的图。本仓库刻意不保留任何测试图片，
-          # 因此这里在 runner 的临时目录里现造一个 2x2 PNG —— 只存在于运行期，不进仓库、不进产物。
-          $fixture = Join-Path $env:RUNNER_TEMP 'rmbg-smoke-2x2.png'
-          [IO.File]::WriteAllBytes($fixture, [Convert]::FromBase64String(
-            'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR42mM4YWMERAwQCgAkTgTZAxpEBAAAAABJRU5ErkJggg=='))
+            # 要触达"模型文件不存在"，输入必须先通过路径校验与格式筛选，
+            # 所以需要一张能解码的图。本仓库刻意不保留任何测试图片，
+            # 因此这里在 runner 的临时目录里现造一个 2x2 PNG —— 只存在于运行期，不进仓库、不进产物。
+            $fixture = Join-Path $env:RUNNER_TEMP 'rmbg-smoke-2x2.png'
+            [IO.File]::WriteAllBytes($fixture, [Convert]::FromBase64String(
+              'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR42mM4YWMERAwQCgAkTgTZAxpEBAAAAABJRU5ErkJggg=='))
 
-          Test-Rmbg @('-i', $fixture, '-o', (Join-Path $env:RUNNER_TEMP 'rmbg-smoke-out'), '--model', 'C:\no\such\model.onnx') 3 '模型文件不存在'
+            Test-Rmbg @('-i', $fixture, '-o', (Join-Path $env:RUNNER_TEMP 'rmbg-smoke-out'), '--model', 'C:\no\such\model.onnx') 3 '模型文件不存在'
+          } catch {
+            # 脚本自身出错时，把异常与调用位置发成注解，避免只剩下"退出码 1"。
+            $stack = $_.ScriptStackTrace
+            if ($stack) { $stack = $stack -replace '\r?\n', ' <- ' }
+            Write-Host "::error::冒烟测试脚本异常：$($_.Exception.Message)"
+            Write-Host "::error::调用位置：$stack"
+            throw
+          }
 
           if ($failures.Count -gt 0) {
             Write-Host ''
