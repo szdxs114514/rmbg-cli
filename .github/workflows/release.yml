@@ -145,7 +145,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $zip = Join-Path (Resolve-Path dist) "rmbg-cli-${{ needs.prepare.outputs.version }}-${{ matrix.rid }}.zip"
+          $version = '${{ needs.prepare.outputs.version }}'
+          $rid = '${{ matrix.rid }}'
+          $zip = Join-Path (Resolve-Path dist) "rmbg-cli-$version-$rid.zip"
           Compress-Archive -Path (Join-Path (Resolve-Path publish) '*') -DestinationPath $zip -CompressionLevel Optimal
 
           Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -154,17 +156,22 @@ jobs:
             if (($archive.Entries | ForEach-Object FullName) -notcontains 'rmbg.exe') {
               throw '压缩包根目录缺少 rmbg.exe'
             }
-            Write-Host ("未签名包：{0} 项 / {1:N1} MB" -f $archive.Entries.Count, ((Get-Item $zip).Length / 1MB))
+            Write-Host ("压缩包：{0} 项 / {1:N1} MB" -f $archive.Entries.Count, ((Get-Item $zip).Length / 1MB))
           } finally {
             $archive.Dispose()
           }
+
+          # 另存一份供签名上传用的副本，文件名刻意与最终发布件不同：
+          # actions/upload-artifact 在同一 workflow run 内遇到重复文件名会直接 409 失败
+          # （其已知缺陷，SignPath 文档中也提到过），换个名字即可绕开。
+          Copy-Item -LiteralPath $zip -Destination (Join-Path (Resolve-Path dist) "unsigned-$rid.zip") -Force
 
       - name: 上传待签名产物
         id: upload-unsigned
         uses: actions/upload-artifact@v7
         with:
           name: unsigned-${{ matrix.rid }}
-          path: dist/*.zip
+          path: dist/unsigned-*.zip
           # 上传 zip 本身而不额外包一层，SignPath 侧配 skip-decompress: true。
           archive: false
           retention-days: 3
