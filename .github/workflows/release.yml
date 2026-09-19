@@ -330,6 +330,9 @@ jobs:
           # 这里全量下载，下一步再按文件名挑出要发布的包。
           merge-multiple: true
           path: artifacts
+          # 必须显式跳过解压：上传用的是 archive: false，产物内容就是我们的 zip，
+          # 而 download-artifact 默认会把它当压缩包解开，摊成一堆 dll/exe。
+          skip-decompress: true
 
       - name: 挑选发布文件
         run: |
