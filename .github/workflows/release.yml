@@ -321,6 +321,12 @@ jobs:
       contents: write
 
     steps:
+      # gh 需要仓库上下文才能创建 Release：没有本地 git 仓库时它会直接报
+      # "failed to run git: fatal: not a git repository"。checkout 一次最省心，
+      # 体量也很小（模型与产物都不在仓库里）。
+      - name: 检出源码
+        uses: actions/checkout@v7
+
       - name: 下载全部发布产物
         uses: actions/download-artifact@v8
         with:
