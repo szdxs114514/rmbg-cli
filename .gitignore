@@ -1,0 +1,19 @@
+# 构建产物
+bin/
+obj/
+*.user
+*.suo
+
+# 模型权重：体积大，不入库；用 scripts/Get-RmbgModel.ps1 或 --download-model 下载
+models/
+*.onnx
+
+# aria2 便携版（由 --install-aria2 自动安装）
+tools/aria2/
+
+# 运行期产物
+*.partial
+
+# IDE
+.vs/
+.idea/

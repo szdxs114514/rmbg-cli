@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+
+    <!-- Windows ML 与 Windows SDK 投影要求的最低 TFM；10.0.19041 为常用基线 -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.18362.0</TargetPlatformMinVersion>
+    <SupportedOSPlatformVersion>10.0.18362.0</SupportedOSPlatformVersion>
+
+    <!-- 原生依赖(onnxruntime.dll / DirectML.dll / Microsoft.Windows.AI.MachineLearning.dll)
+         按 RID 复制到输出目录，因此必须指定 RID。ARM64 设备改用 -r win-arm64。 -->
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+
+    <AssemblyName>rmbg</AssemblyName>
+    <RootNamespace>RmbgCli</RootNamespace>
+    <Version>1.0.0</Version>
+
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+
+    <!-- 控制台程序不需要 WinRT 的 MVVM/打包支持 -->
+    <EnableMsixTooling>false</EnableMsixTooling>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 提供 Windows ML 执行提供程序目录(WinRT 投影) + 托管 ONNX Runtime 绑定
+         + 原生 onnxruntime.dll(1.27.1)/DirectML.dll。不要另外引用 Microsoft.ML.OnnxRuntime，
+         否则会与包内自带的原生库冲突。
+         2.3.42 是当前最新的稳定版（更高的 2.6.x 仅有 -rc 预览版）。 -->
+    <PackageReference Include="Microsoft.Windows.AI.MachineLearning" Version="2.3.42" />
+
+    <!-- 3.1.12 是 SixLabors 免费授权线（Six Labors Split License）上的最高版本。
+         4.x 起改为商业授权，构建期强制要求 $(SixLaborsLicenseKey) 或 sixlabors.lic，
+         缺失即编译失败，因此本项目有意停留在 3.1.12。 -->
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+  </ItemGroup>
+
+</Project>

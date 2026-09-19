@@ -1,0 +1,15 @@
+# 定制 `gh release create --generate-notes` 生成的发布说明分类。
+# 未匹配到任何标签的 PR 会落到默认分类里。
+
+changelog:
+  categories:
+    - title: 新增功能
+      labels: [enhancement, feature]
+    - title: 问题修复
+      labels: [bug, fix]
+    - title: 文档
+      labels: [documentation]
+    - title: 依赖与构建
+      labels: [dependencies, ci]
+    - title: 其它变更
+      labels: ['*']

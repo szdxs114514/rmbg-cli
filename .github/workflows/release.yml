@@ -1,0 +1,358 @@
+name: Release
+
+# 发布流程：打 tag 即出包。
+#
+#   1. prepare  解析 tag → 版本号
+#   2. package  按 RID 并行：自包含发布 → 打 zip → （可选）SignPath 签名 → 签名校验 → 上传
+#   3. release  汇总产物，用 gh CLI 创建 GitHub Release
+#
+# SignPath 签名是"配好即生效"的：只有当仓库里配置了对应的 secret / variable 时才会执行，
+# 否则自动跳过并在日志里给出提示，发布流程本身不会被卡住。
+# 需要的配置（Settings → Secrets and variables → Actions）：
+#   secret   : SIGNPATH_API_TOKEN
+#   variable : SIGNPATH_ORGANIZATION_ID / SIGNPATH_PROJECT_SLUG / SIGNPATH_SIGNING_POLICY_SLUG
+#              （可选）SIGNPATH_ARTIFACT_CONFIGURATION_SLUG
+# 详见 README「代码签名（SignPath）」一节。
+
+on:
+  push:
+    tags:
+      # 这里用的是 glob（不是正则）：`v` + 数字开头即可，
+      # 具体格式由 prepare job 里的校验把关，非法标签会带着明确提示失败。
+      - 'v[0-9]*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（例如 v1.0.0）；手动触发时必填'
+        required: true
+        type: string
+      skip_signing:
+        description: '跳过代码签名（仅用于排查构建问题）'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  CONFIGURATION: Release
+
+jobs:
+  prepare:
+    name: 解析版本号
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+
+    steps:
+      - name: 解析 tag 与版本号
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            tag="${{ github.ref_name }}"
+          else
+            tag="${{ inputs.tag }}"
+          fi
+
+          if [ -z "$tag" ]; then
+            echo "::error::手动触发时必须提供 tag 输入（例如 v1.0.0）。"
+            exit 1
+          fi
+
+          version="${tag#v}"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::标签格式应为 v<major>.<minor>.<patch>，当前为 '$tag'。"
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          {
+            echo "### 发布 $tag"
+            echo ""
+            echo "- 版本号：\`$version\`"
+            echo "- 提交：\`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  package:
+    name: 打包 ${{ matrix.rid }}
+    needs: prepare
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            runner: windows-latest
+          - rid: win-arm64
+            runner: windows-11-arm
+
+    runs-on: ${{ matrix.runner }}
+
+    # secrets 上下文不能用在 if 表达式里，所以先落到环境变量再做条件判断。
+    # 代价是这个 token 对该 job 的所有步骤可见——该 job 里的 action 全部是官方 action。
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+      SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+      SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+      SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+      SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v7
+
+      - name: 安装 .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - name: 发布自包含产物（版本号写入程序集）
+        run: >-
+          dotnet publish src/RmbgCli
+          -c ${{ env.CONFIGURATION }}
+          -r ${{ matrix.rid }}
+          --self-contained true
+          -o publish
+          -p:Version=${{ needs.prepare.outputs.version }}
+          -p:ContinuousIntegrationBuild=true
+
+      - name: 确认版本号已嵌入
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = (& .\publish\rmbg.exe --version 2>&1 | Out-String).Trim()
+          Write-Host $output
+          if ($output -notmatch [regex]::Escape('${{ needs.prepare.outputs.version }}')) {
+            throw "程序报告的版本号与标签不一致：$output"
+          }
+
+      - name: 打包为 zip
+        shell: pwsh
+        # 压缩包根目录直接是文件，不留外层文件夹：
+        # SignPath 的 artifact configuration 里 <zip-file> 的 <pe-file path="rmbg.exe"> 依赖这个结构。
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $zip = Join-Path (Resolve-Path dist) "rmbg-cli-${{ needs.prepare.outputs.version }}-${{ matrix.rid }}.zip"
+          Compress-Archive -Path (Join-Path (Resolve-Path publish) '*') -DestinationPath $zip -CompressionLevel Optimal
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            if (($archive.Entries | ForEach-Object FullName) -notcontains 'rmbg.exe') {
+              throw '压缩包根目录缺少 rmbg.exe'
+            }
+            Write-Host ("未签名包：{0} 项 / {1:N1} MB" -f $archive.Entries.Count, ((Get-Item $zip).Length / 1MB))
+          } finally {
+            $archive.Dispose()
+          }
+
+      - name: 上传待签名产物
+        id: upload-unsigned
+        uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-${{ matrix.rid }}
+          path: dist/*.zip
+          # 上传 zip 本身而不额外包一层，SignPath 侧配 skip-decompress: true。
+          archive: false
+          retention-days: 3
+
+      - name: 提交 SignPath 签名请求
+        id: signpath
+        # 只有在密钥与组织信息都配置齐全时才执行，否则这一步被跳过。
+        if: >-
+          ${{ inputs.skip_signing != true
+              && env.SIGNPATH_API_TOKEN != ''
+              && env.SIGNPATH_ORGANIZATION_ID != ''
+              && env.SIGNPATH_PROJECT_SLUG != ''
+              && env.SIGNPATH_SIGNING_POLICY_SLUG != '' }}
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ env.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ env.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG || 'artifact-configuration' }}
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: ${{ github.workspace }}/signed
+          skip-decompress: true
+
+      - name: 说明签名状态
+        if: steps.signpath.outcome == 'skipped'
+        shell: pwsh
+        run: |
+          $missing = @()
+          if ($env:SIGNPATH_API_TOKEN) { } else { $missing += 'secret SIGNPATH_API_TOKEN' }
+          if ($env:SIGNPATH_ORGANIZATION_ID) { } else { $missing += 'variable SIGNPATH_ORGANIZATION_ID' }
+          if ($env:SIGNPATH_PROJECT_SLUG) { } else { $missing += 'variable SIGNPATH_PROJECT_SLUG' }
+          if ($env:SIGNPATH_SIGNING_POLICY_SLUG) { } else { $missing += 'variable SIGNPATH_SIGNING_POLICY_SLUG' }
+
+          Write-Host '::warning::未执行代码签名，本次发布的是未签名产物。'
+          if ($missing.Count -gt 0) {
+            Write-Host "缺少配置：$($missing -join '、')"
+          } else {
+            Write-Host '已显式指定 skip_signing，跳过签名。'
+          }
+          Write-Host "完成配置后重新发布即可获得签名产物，步骤见 README「代码签名（SignPath）」。"
+          "### 未执行代码签名`n`n缺少配置：$($missing -join '、')" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: 规整产物并校验签名
+        shell: pwsh
+        # SignPath 在不同配置下可能回传"签名后的压缩包"或"解压后的文件"，
+        # 两种形态都归一成同一个压缩包名，保证 Release 里的资产名稳定。
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $zipName = "rmbg-cli-${{ needs.prepare.outputs.version }}-${{ matrix.rid }}.zip"
+          $signed = Join-Path $env:GITHUB_WORKSPACE 'signed'
+          $dist = 'dist'
+          $final = 'dist-final'
+          New-Item -ItemType Directory -Force -Path $final | Out-Null
+
+          # 上一步是否真的跑了签名。results 里取不到时按"未签名"处理。
+          $signedRan = '${{ steps.signpath.outcome }}' -eq 'success'
+
+          if ($signedRan -and (Test-Path -LiteralPath $signed)) {
+            $inner = @(Get-ChildItem -LiteralPath $signed -Filter '*.zip' -Recurse -File)
+
+            if ($inner.Count -eq 1) {
+              Write-Host "签名服务回传压缩包：$($inner[0].Name)"
+              Copy-Item -LiteralPath $inner[0].FullName -Destination (Join-Path $final $zipName) -Force
+            } else {
+              Write-Host '签名服务回传解压后的文件，重新打包。'
+              Compress-Archive -Path (Join-Path (Resolve-Path $signed) '*') -DestinationPath (Join-Path $final $zipName) -CompressionLevel Optimal
+            }
+          } else {
+            Copy-Item -LiteralPath (Join-Path $dist $zipName) -Destination (Join-Path $final $zipName) -Force
+          }
+
+          $finalZip = Join-Path $final $zipName
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($finalZip)
+          try {
+            if (($archive.Entries | ForEach-Object FullName) -notcontains 'rmbg.exe') {
+              throw "$zipName 的根目录缺少 rmbg.exe"
+            }
+          } finally {
+            $archive.Dispose()
+          }
+
+          # 解出 exe 检查 Authenticode 状态。
+          $probe = Join-Path $env:RUNNER_TEMP 'signature-probe'
+          if (Test-Path -LiteralPath $probe) { Remove-Item -LiteralPath $probe -Recurse -Force }
+          Expand-Archive -LiteralPath $finalZip -DestinationPath $probe -Force
+
+          $signature = Get-AuthenticodeSignature -LiteralPath (Join-Path $probe 'rmbg.exe')
+          Write-Host "Authenticode 状态：$($signature.Status)"
+          if ($signature.SignerCertificate) {
+            Write-Host "签名者：$($signature.SignerCertificate.Subject)"
+          }
+
+          if ($signedRan) {
+            if ($signature.Status -eq 'NotSigned') {
+              throw '签名流程报告成功，但 rmbg.exe 仍未被签名。'
+            }
+            if ($signature.Status -ne 'Valid') {
+              # 测试证书在 CI 上不受信任属正常情况，只提示不失败。
+              Write-Host "::warning::签名状态为 $($signature.Status)，若使用的是测试证书可忽略。"
+            }
+          } else {
+            Write-Host '::notice::本次产物未签名（正常情况，因为未配置 SignPath）。'
+          }
+
+          Write-Host ("最终产物：{0} / {1:N1} MB" -f $zipName, ((Get-Item $finalZip).Length / 1MB))
+          $signedFlag = if ($signedRan -and $signature.Status -ne 'NotSigned') { 'yes' } else { 'no' }
+          "SIGNED=$signedFlag" >> $env:GITHUB_ENV
+
+      - name: 上传发布产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.rid }}
+          path: dist-final/*.zip
+          archive: false
+          retention-days: 7
+
+      - name: 写入构建摘要
+        shell: pwsh
+        run: |
+          $zip = Get-Item "dist-final/rmbg-cli-${{ needs.prepare.outputs.version }}-${{ matrix.rid }}.zip"
+          $signed = if ($env:SIGNED -eq 'yes') { '已签名' } else { '未签名' }
+          @(
+            "### ${{ matrix.rid }}",
+            "",
+            "| 项目 | 值 |",
+            "| --- | --- |",
+            "| 压缩包 | ``$($zip.Name)`` |",
+            "| 大小 | $([math]::Round($zip.Length / 1MB, 1)) MB |",
+            "| 运行器 | ${{ matrix.runner }} |",
+            "| 代码签名 | $signed |"
+          ) >> $env:GITHUB_STEP_SUMMARY
+
+  release:
+    name: 创建 GitHub Release
+    needs: [prepare, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # 只有这个 job 需要写权限，且仅用于创建 Release。
+      contents: write
+
+    steps:
+      - name: 下载全部发布产物
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: artifacts
+
+      - name: 列出待发布文件
+        run: |
+          set -euo pipefail
+          ls -lh artifacts
+          count=$(find artifacts -type f | wc -l)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::没有可发布的产物。"
+            exit 1
+          fi
+
+      - name: 校验校验和
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum *.zip | tee SHA256SUMS.txt
+
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在，覆盖其中的资产。"
+            gh release upload "$TAG" artifacts/* --clobber
+          else
+            gh release create "$TAG" artifacts/* \
+              --title "rmbg-cli $VERSION" \
+              --generate-notes
+          fi
+
+          {
+            echo "### Release"
+            echo ""
+            echo "已发布：$TAG"
+          } >> "$GITHUB_STEP_SUMMARY"

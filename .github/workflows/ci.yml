@@ -1,0 +1,273 @@
+name: CI
+
+# 持续集成：编译 + 依赖审计 + CLI 行为冒烟测试 + 两个 RID 的发布包校验。
+#
+# 有意不做端到端推理测试：那需要 490 MB 的 ONNX 权重，并且需要一张判读用的图片。
+# 本仓库按要求不含任何测试图片，推理正确性请按 README 用自备图片在本地验证。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# CI 只读仓库内容，不产出任何需要写权限的东西。
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+  CONFIGURATION: Release
+
+jobs:
+  build:
+    name: 编译与冒烟测试
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v7
+
+      - name: 安装 .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - name: 还原依赖
+        run: dotnet restore RmbgCli.sln
+
+      - name: 编译（警告视为错误）
+        # 项目当前为 0 警告；把警告升级为错误可以防止质量随时间退化。
+        run: >-
+          dotnet build RmbgCli.sln
+          -c ${{ env.CONFIGURATION }}
+          --no-restore
+          -warnaserror
+          -p:ContinuousIntegrationBuild=true
+
+      - name: 依赖漏洞审计
+        shell: pwsh
+        # 解析 JSON 而不是匹配文本，避免受 dotnet CLI 输出语言（中/英）影响。
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $json = dotnet list src/RmbgCli/RmbgCli.csproj package --vulnerable --include-transitive --format json | Out-String
+          $report = $json | ConvertFrom-Json
+
+          $found = @()
+          foreach ($project in $report.projects) {
+            foreach ($framework in $project.frameworks) {
+              foreach ($package in @($framework.topLevelPackages) + @($framework.transitivePackages)) {
+                if ($package -and $package.vulnerabilities) {
+                  foreach ($v in $package.vulnerabilities) {
+                    $found += "$($package.id) $($package.resolvedVersion) -> $($v.severity) ($($v.advisoryurl))"
+                  }
+                }
+              }
+            }
+          }
+
+          if ($found.Count -gt 0) {
+            $found | ForEach-Object { Write-Host "::error::易受攻击的依赖：$_" }
+            throw "发现 $($found.Count) 个存在已知漏洞的依赖包。"
+          }
+
+          Write-Host '未发现存在已知漏洞的依赖包。'
+
+      - name: CLI 行为冒烟测试
+        shell: pwsh
+        # 断言退出码契约（见 README「退出码」一节）与关键输出。
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # 被测试的程序会把错误/警告写到 stderr，而这里期望的正是非零退出码，
+          # 所以调用期间必须容忍 stderr，否则会被当成终止性错误而假失败。
+          # 两个开关分别覆盖 PowerShell 7.3+ 与更早版本（含 5.1）的行为差异。
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          $exe = 'src/RmbgCli/bin/${{ env.CONFIGURATION }}/net8.0-windows10.0.19041.0/win-x64/rmbg.exe'
+          if (-not (Test-Path -LiteralPath $exe)) { throw "未找到可执行文件：$exe" }
+
+          $failures = [System.Collections.Generic.List[string]]::new()
+
+          function Test-Rmbg {
+            param(
+              [string[]] $Arguments,
+              [int] $ExpectedExit,
+              [string] $Label,
+              [string] $OutputPattern = '',
+              [int] $MinOutputLength = 0
+            )
+
+            $output = ''
+            $code = -1
+            $tolerateStderr = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+              $output = & $exe @Arguments 2>&1 | Out-String
+              $code = $LASTEXITCODE
+            } finally {
+              $ErrorActionPreference = $tolerateStderr
+            }
+
+            if ($code -ne $ExpectedExit) {
+              $failures.Add("$Label：退出码 $code，期望 $ExpectedExit")
+              Write-Host "  x $Label -> 退出码 $code（期望 $ExpectedExit）"
+              return
+            }
+
+            if ($OutputPattern -and $output -notmatch $OutputPattern) {
+              $failures.Add("$Label：输出未匹配 /$OutputPattern/")
+              Write-Host "  x $Label -> 输出未匹配 /$OutputPattern/"
+              return
+            }
+
+            if ($MinOutputLength -gt 0 -and $output.Trim().Length -lt $MinOutputLength) {
+              $failures.Add("$Label：输出过短（$($output.Trim().Length) 字符）")
+              Write-Host "  x $Label -> 输出过短"
+              return
+            }
+
+            Write-Host "  + $Label -> 退出码 $code"
+          }
+
+          Write-Host '--- 正常路径（期望退出码 0）---'
+          Test-Rmbg @('--version') 0 '--version' -OutputPattern 'rmbg \d+\.\d+'
+          Test-Rmbg @('--help')    0 '--help'    -OutputPattern '--recursive' -MinOutputLength 500
+          Test-Rmbg @('--ep', 'list') 0 '--ep list' -MinOutputLength 40
+
+          Write-Host '--- 参数错误（期望退出码 2）---'
+          Test-Rmbg @('--bogus') 2 '未知选项'
+          Test-Rmbg @('-i', 'in.png') 2 '缺少输出路径'
+          Test-Rmbg @('--download-model', 'bogus') 2 '未知模型变体'
+          Test-Rmbg @('-i', 'in.png', '-o', 'out', '--mask', 'wrong') 2 '非法枚举值'
+          Test-Rmbg @('-i', 'in.png', '-o', 'out', '--size', '1000') 2 'size 非 32 倍数'
+
+          Write-Host '--- 环境/读写错误（期望退出码 3 / 5）---'
+          Test-Rmbg @('-i', 'C:\no\such\photo.png', '-o', (Join-Path $env:RUNNER_TEMP 'rmbg-smoke-out')) 5 '输入路径不存在'
+
+          # 要触达"模型文件不存在"，输入必须先通过路径校验与格式筛选，
+          # 所以需要一张能解码的图。本仓库刻意不保留任何测试图片，
+          # 因此这里在 runner 的临时目录里现造一个 2x2 PNG —— 只存在于运行期，不进仓库、不进产物。
+          $fixture = Join-Path $env:RUNNER_TEMP 'rmbg-smoke-2x2.png'
+          [IO.File]::WriteAllBytes($fixture, [Convert]::FromBase64String(
+            'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR42mM4YWMERAwQCgAkTgTZAxpEBAAAAABJRU5ErkJggg=='))
+
+          Test-Rmbg @('-i', $fixture, '-o', (Join-Path $env:RUNNER_TEMP 'rmbg-smoke-out'), '--model', 'C:\no\such\model.onnx') 3 '模型文件不存在'
+
+          if ($failures.Count -gt 0) {
+            Write-Host ''
+            $failures | ForEach-Object { Write-Host "::error::$_" }
+            throw "$($failures.Count) 项冒烟测试失败。"
+          }
+
+          Write-Host ''
+          Write-Host '全部冒烟测试通过。'
+
+  package:
+    name: 发布包校验（${{ matrix.rid }}）
+    needs: build
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 每个 RID 都用自己的原生 runner，这样 arm64 产物可以真实运行，
+          # 而不是只证明"能打包"。
+          - rid: win-x64
+            runner: windows-latest
+          - rid: win-arm64
+            runner: windows-11-arm
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v7
+
+      - name: 安装 .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - name: 发布自包含单目录产物
+        run: >-
+          dotnet publish src/RmbgCli
+          -c ${{ env.CONFIGURATION }}
+          -r ${{ matrix.rid }}
+          --self-contained true
+          -o publish
+          -p:ContinuousIntegrationBuild=true
+
+      - name: 校验产物完整性
+        shell: pwsh
+        # 原生库缺失是最容易在"改了依赖"后悄悄发生的问题，所以逐个断言。
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          foreach ($file in @(
+            'rmbg.exe',
+            'rmbg.dll',
+            'onnxruntime.dll',
+            'DirectML.dll',
+            'Microsoft.Windows.AI.MachineLearning.dll',
+            'Microsoft.ML.OnnxRuntime.dll',
+            'SixLabors.ImageSharp.dll'
+          )) {
+            if (-not (Test-Path -LiteralPath (Join-Path 'publish' $file))) {
+              throw "发布产物缺少 $file（${{ matrix.rid }}）"
+            }
+            Write-Host "  + $file"
+          }
+
+          $size = (Get-ChildItem -LiteralPath publish -Recurse -File | Measure-Object Length -Sum).Sum
+          Write-Host ("发布目录：{0:N0} 个文件 / {1:N1} MB" -f (Get-ChildItem publish -Recurse -File).Count, ($size / 1MB))
+
+      - name: 运行发布的程序
+        shell: pwsh
+        # 自包含发布能编译成功但运行时找不到原生库，只有真的启动一次才能发现。
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = & .\publish\rmbg.exe --version 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) { throw "发布的程序启动失败，退出码 $LASTEXITCODE`n$output" }
+          Write-Host $output.Trim()
+
+      - name: 打包为 zip
+        shell: pwsh
+        # 压缩包的根目录必须是文件本身（而不是多一层文件夹），
+        # 否则 SignPath 的 artifact configuration 里 <zip-file> 的路径匹配会失效。
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $zip = Join-Path (Resolve-Path dist) "rmbg-cli-${{ matrix.rid }}.zip"
+          Compress-Archive -Path (Join-Path (Resolve-Path publish) '*') -DestinationPath $zip -CompressionLevel Optimal
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            $names = $archive.Entries | ForEach-Object { $_.FullName }
+            if ($names -notcontains 'rmbg.exe') { throw '压缩包根目录缺少 rmbg.exe' }
+            if ($names | Where-Object { $_ -like '*/*' -and $_ -notlike '*/' }) {
+              Write-Host '注意：压缩包内含子目录（预期只应有根目录文件）：'
+              $names | Where-Object { $_ -like '*/*' } | Select-Object -First 5 | ForEach-Object { Write-Host "  $_" }
+            }
+            Write-Host ("压缩包：{0} 项 / {1:N1} MB" -f $archive.Entries.Count, ((Get-Item $zip).Length / 1MB))
+          } finally {
+            $archive.Dispose()
+          }
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-${{ matrix.rid }}
+          path: dist/*.zip
+          # archive: false 让上传的就是我们的 zip 本身，
+          # 这样 SignPath 侧只需一层 <zip-file> 即可描述结构。
+          archive: false
+          retention-days: 7

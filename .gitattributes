@@ -1,0 +1,34 @@
+# 换行规范化。
+#
+# 不显式声明时，换行风格取决于各人本机的 core.autocrlf 设置，
+# 会出现"整文件 diff"这类噪音。这里把规则固定下来。
+
+* text=auto
+
+# 二进制资源不做任何转换。
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.webp binary
+*.bmp  binary
+*.ico  binary
+*.gif  binary
+*.onnx binary
+*.zip  binary
+*.exe  binary
+*.dll  binary
+*.pdb  binary
+
+# CI/发布配置保持 LF：Linux 运行器上的 shell 步骤与各类解析器都对 LF 最省心。
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+
+# PowerShell 脚本保持 CRLF：更贴合 Windows 平台的编辑习惯，
+# Windows PowerShell 5.1 与 PowerShell 7 都能正确执行。
+*.ps1  text eol=crlf
+
+# 解决方案与工程文件保持 CRLF，避免 Visual Studio 反复重写。
+*.sln  text eol=crlf
+*.csproj text eol=crlf

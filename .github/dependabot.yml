@@ -1,0 +1,39 @@
+# 依赖自动更新。
+#
+# 注意 SixLabors.ImageSharp 4.x 起改为商业授权，构建期强制要求许可证密钥，
+# 因此这里显式忽略 4.0.0 及以上版本，避免 Dependabot 反复提出无法合并的 PR。
+# 详见 README「运行环境与依赖」。
+
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '04:00'
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    groups:
+      # 把同一批更新合成一个 PR，减少评审负担。
+      nuget:
+        patterns: ['*']
+    ignore:
+      - dependency-name: SixLabors.ImageSharp
+        versions: ['>=4.0.0']
+    commit-message:
+      prefix: 'chore(deps)'
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '04:00'
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ['*']
+    commit-message:
+      prefix: 'chore(ci)'

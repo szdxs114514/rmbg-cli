@@ -1,0 +1,22 @@
+<!--
+  SignPath 制品配置（Artifact Configuration）源文件。
+
+  这个文件本身不会被签名流程读取：SignPath 的制品配置保存在 SignPath 网站的项目里
+  （Project → Artifact Configurations）。把它纳入版本控制的目的是——
+  官方建议"把制品配置的 slug 一起签入源码仓库"，这样任何一次历史发布都能找回当时用的配置。
+  改动这里之后，请把内容同步粘贴到 SignPath 项目的对应配置中，并保持 slug 与
+  release.yml 里的 SIGNPATH_ARTIFACT_CONFIGURATION_SLUG 一致。
+
+  结构说明：
+    压缩包根目录（无外层文件夹）
+      └─ rmbg.exe                       唯一需要签名的自有二进制
+      其余文件（.NET 运行时、onnxruntime.dll、DirectML.dll、ImageSharp 等）都是第三方组件，
+      不应使用本项目的证书签名——这也是 SignPath 文档明确建议的做法。
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="rmbg.exe">
+      <authenticode-sign/>
+    </pe-file>
+  </zip-file>
+</artifact-configuration>
