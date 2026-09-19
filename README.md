@@ -888,7 +888,7 @@ git push origin v1.0.0
     受限网络、离线或需要固定版本的环境，应改用官方「自带 EP」方式把 EP 随应用分发。
 11. **EP 安装是系统级行为**。安装后的 EP 会被同机其它应用共享，且可能随 Windows 自动更新。
     这既是优点（一次安装多处受益），也意味着本工具不会在未经确认的情况下安装。
-
+12. **目前一键下载模型只能从ModelScope下载（因为Hugging Face的原版模型是Gated Model）**，如果需要指定BRIA AI原版需要自行下载并且指定模型路径
 ---
 
 ## 14. 隐私与费用
@@ -901,7 +901,7 @@ git push origin v1.0.0
 ### 相关链接
 
 - 模型来源：[ModelScope · AI-ModelScope/RMBG-2.0](https://www.modelscope.cn/models/AI-ModelScope/RMBG-2.0)
-  （RMBG-2.0 / BiRefNet，由 BRIA AI 发布）
+  （RMBG-2.0 / BiRefNet，由 BRIA AI 发布，镜像自 https://huggingface.co/briaai/RMBG-2.0 ）
 - Windows ML 文档：[执行提供程序](https://learn.microsoft.com/windows/ai/new-windows-ml/supported-execution-providers) ·
   [安装 EP](https://learn.microsoft.com/windows/ai/new-windows-ml/initialize-execution-providers) ·
   [注册 EP](https://learn.microsoft.com/windows/ai/new-windows-ml/register-execution-providers) ·
