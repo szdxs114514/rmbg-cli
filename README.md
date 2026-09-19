@@ -399,7 +399,7 @@ SHA256 : 67D015301EEF0B612191212D564C5BB0A14B5B9C4796B76454276A4D28D9B288
 
 ### 6.4 模型变体与定位顺序
 
-来源：**ModelScope**（`https://www.modelscope.cn/models/AI-ModelScope/RMBG-2.0`），国内可直连。
+来源：**ModelScope**（`https://www.modelscope.cn/models/AI-ModelScope/RMBG-2.0`）。
 
 | 变体 | 文件 | 体积 | 建议用途 |
 | --- | --- | --- | --- |
@@ -766,7 +766,7 @@ git push origin v1.0.0
 
 手动触发时需在 Actions 页面填写标签；勾选 `skip_signing` 可临时跳过签名。
 
-### 10.4 代码签名（SignPath）
+### 10.4 代码签名（SignPath，预留）
 
 发布包默认**未签名**。配好下面这些内容后签名即自动生效，工作流无需改动：
 
@@ -864,7 +864,7 @@ git push origin v1.0.0
 | 输出目录不可写 | 权限或路径非法 | 检查 `-o` 指向的目录；程序处理前已用探针文件预检 |
 | 下载探测失败 `HTTP 403 Forbidden` | 服务端要求请求携带 `User-Agent` | 内置下载器已强制设置该头部；自研客户端需自行补上 |
 | aria2 安装校验失败 | 镜像/代理改写了安装包内容 | 程序会打印期望与实际 SHA256 并中止；可手动下载后把 `aria2c.exe` 放入 `tools\aria2\` |
-| EP下载不了/速度慢 | Windows更新服务被关闭/异常，暂停Windows更新，系统不完整，等等...... | 取消暂停Windows更新，启动Windows更新服务，检查系统完整性，关闭或开启传递优化，使用`UsbEAm Hosts Editor`→右键选择带有`Windows更新`的选项→点击`检测延迟`→把`前10名的IP双击测速一遍`→选中`最快的IP`→点击`应用选中`
+| EP下载不了/速度慢 | Windows更新服务被关闭/异常，暂停Windows更新，系统不完整，等等...... | 取消暂停Windows更新，启动Windows更新服务，检查系统完整性，关闭或开启传递优化，使用`UsbEAm Hosts Editor`→右键选择带有`Windows更新`的选项→点击`检测延迟`→把`前10名的IP双击测速一遍`→选中`最快的IP`→点击`应用选中`→打开任务管理器→服务→找到DoSvc（或者Delivery Optimization）点击重启 |
 ---
 
 ## 13. 已知限制
@@ -887,8 +887,8 @@ git push origin v1.0.0
    或自行放置 `tools\aria2\aria2c.exe`。
 10. **EP 的动态下载安装需要 Windows 11 24H2（build 26100）及以上**，且硬件必须满足对应
     厂商要求；不满足时 Windows 会直接拒绝安装（表现为"产品不适用或找不到"）。
-    受限网络、离线或需要固定版本的环境，应改用官方「自带 EP」方式把 EP 随应用分发。
-11. **EP 安装是系统级行为**。安装后的 EP 会被同机其它应用共享，且可能随 Windows 自动更新。
+    受限网络、离线或需要固定版本的环境，应改用官方「自带 EP」方式把 EP 随应用分发（暂未添加）。
+11. **EP 安装是系统级行为**。安装后的 EP 会被同机其它应用共享，且EP将通过 Windows 更新的可选非安全预览版本（即“D 周版本”）进行更新。
     这既是优点（一次安装多处受益），也意味着本工具不会在未经确认的情况下安装。
 12. **目前一键下载模型只能从 ModelScope 下载**（因为 Hugging Face 上的原版模型是 Gated Model）；
     如果需要使用 BRIA AI 原版权重，需要自行下载并用 `--model <路径>` 指定。
@@ -905,7 +905,7 @@ git push origin v1.0.0
 ### 相关链接
 
 - 模型来源：[ModelScope · AI-ModelScope/RMBG-2.0](https://www.modelscope.cn/models/AI-ModelScope/RMBG-2.0)
-  （RMBG-2.0 / BiRefNet，由 BRIA AI 发布，镜像自 https://huggingface.co/briaai/RMBG-2.0 ）
+  （RMBG-2.0 基于 BiRefNet，由 BRIA AI 发布，镜像自 https://huggingface.co/briaai/RMBG-2.0 ）
 - Windows ML 文档：[执行提供程序](https://learn.microsoft.com/windows/ai/new-windows-ml/supported-execution-providers) ·
   [安装 EP](https://learn.microsoft.com/windows/ai/new-windows-ml/initialize-execution-providers) ·
   [注册 EP](https://learn.microsoft.com/windows/ai/new-windows-ml/register-execution-providers) ·
